@@ -1,0 +1,91 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import numpy as np
+import tensorflow as tf
+%env SM_FRAMEWORK=tf.keras
+import time
+import json
+from model.buildmodel import build_model
+from datapreparation.preparation import Xy_preparation, augmentation_brightness_contrast
+
+AUTO = tf.data.AUTOTUNE
+
+EPOCHS = 500
+batch_size = 32
+
+IMAGES_PATH = "path_image"
+MASKS_PATH = "path_mask"
+
+strategy = tf.distribute.MirroredStrategy()
+
+print("Building Model. . .")
+
+with strategy.scope():
+    model = build_model()
+
+print("Model Compiled!")
+
+named_tuple = time.localtime() # get struct_time
+time_string = time.strftime("%d%m%Y%H%M%S", named_tuple)
+
+checkpoint_path = f"model_checkpoints/{time_string}/best_model.ckpt"
+model_checkpoint = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                                      monitor="val_loss",
+                                                      save_best_only=True,
+                                                      save_weights_only=True)
+
+
+print("Preparing Dataset . . .")
+
+X_train, X_test, y_train, y_test = Xy_preparation(IMAGES_PATH, MASKS_PATH)
+
+train_INDX = np.arange(len(y_train))
+test_INDX = np.arange(len(y_test))
+
+def mount_train(index):
+    index = tf.get_static_value(index)
+    image = tf.cast(X_train[index]/255., tf.float32)
+    mask = tf.one_hot(y_train[index]/255, depth=2)
+    return image, mask
+
+def mount_test(index):
+    index = tf.get_static_value(index)
+    image = tf.cast(X_test[index]/255., tf.float32)
+    mask = tf.one_hot(y_test[index]/255, depth=2)
+    return image, mask
+
+train_dataset = tf.data.Dataset.from_tensor_slices(train_INDX)
+train_dataset = (
+    train_dataset.shuffle(len(train_INDX))
+    .map(lambda x: tf.py_function(mount_train, [x], [tf.float32, tf.float32]), num_parallel_calls=AUTO)
+    .batch(batch_size)
+    .prefetch(AUTO)
+    )
+
+test_dataset = tf.data.Dataset.from_tensor_slices(test_INDX)
+test_dataset = (
+    test_dataset.map(lambda x: tf.py_function(mount_test, [x], [tf.float32, tf.float32]), num_parallel_calls=AUTO)
+    .batch(batch_size)
+    .prefetch(AUTO)
+    )
+
+print("Dataset Loaded!")
+
+callbacks = [
+             tf.keras.callbacks.ModelCheckpoint(os.path.join(checkpoint_path, "best_model.ckpt"), verbose=1, save_weights_only=True, save_best_only=True),
+             tf.keras.callbacks.CSVLogger(os.path.join(checkpoint_path, "logs.csv"), separator=',', append=True),
+             tf.keras.callbacks.EarlyStopping(monitor="iou_score", patience=50, mode="max", verbose=1, restore_best_weights=True)
+]
+
+history = model.fit(train_dataset,
+                    epochs=EPOCHS,
+                    steps_per_epoch=len(train_dataset),
+                    validation_data=test_dataset,
+                    validation_steps=len(test_dataset),
+                    callbacks=callbacks)
+
+model.save(f"model_checkpoints/{time_string}/last_model.h5")
+
+json.dump(history.history, open(f"model_checkpoints/{time_string}/history.json", 'w'))
+
+print(f"Model Saved at: model_checkpoints/{time_string}")

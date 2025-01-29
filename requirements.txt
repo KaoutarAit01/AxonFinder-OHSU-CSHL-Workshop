@@ -1,0 +1,4 @@
+segmentation-models==1.0.1
+opencv-python==4.8.1.78  
+scikit-learn
+tqdm
