@@ -1,4 +1,4 @@
-# AxonFinder pipeline
+# AxonFinder Pipeline Workshop
 This pipeline is designed to identify and analyze neuronal axons in CycIF images with high precision and accuracy. 
 
 ![pipeline_architecture](https://github.com/user-attachments/assets/1b3db459-b9c2-4d4c-a59d-479d647e765b)
